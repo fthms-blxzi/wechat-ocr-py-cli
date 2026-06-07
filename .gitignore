@@ -1,0 +1,22 @@
+# Python build directories
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# PyInstaller build outputs
+build/
+dist/
+wechat_ocr_cli.spec
+wechat-ocr-py-cli.spec
+
+# Local runtime binaries and source copies
+bin/
+wechat-ocr-cpp-temp/
+
+# Virtual environments
+venv/
+.venv/
+working/
+
+.git.bak/

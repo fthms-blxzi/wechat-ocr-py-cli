@@ -1,0 +1,67 @@
+name: Build Standalone CLI (MSVC)
+
+on:
+  workflow_dispatch:
+
+env:
+  WECHAT_OCR_CMAKE_GENERATOR: ""
+  WECHAT_OCR_CPP_REPO_URL: ""
+  WECHAT_OCR_CPP_REPO_REF: ""
+  WECHAT_VERSION: ""
+
+jobs:
+  build:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+          check-latest: true
+          cache: 'pip'
+          cache-dependency-path: 'requirements.txt'
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run build script
+        run: |
+          python build.py
+
+      - name: Test Single File Mode
+        run: dist\wechat-ocr-py-cli.exe --input "samples\sample-img-1.jpg" --output -
+        shell: cmd
+
+      - name: Test Input List Mode
+        run: |
+          echo samples\sample-img-2.jpg > list.txt
+          echo samples\sample-img-3.jpg >> list.txt
+          dist\wechat-ocr-py-cli.exe --input-list list.txt --output results.jsonl
+          type results.jsonl
+        shell: cmd
+
+      - name: Extract build version and archive name
+        run: python extract_release_meta.py
+
+      - name: Compress executable into 7z
+        run: |
+          cd dist
+          7z a -p"${{ env.VERSION }}" -mhe=on "${{ env.ARCHIVE_NAME }}" wechat-ocr-py-cli.exe
+        shell: pwsh
+
+      - name: Create Release and Upload Asset
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.VERSION }}
+          name: Release ${{ env.VERSION }}
+          files: dist/${{ env.ARCHIVE_NAME }}
+          draft: false
+          prerelease: false
