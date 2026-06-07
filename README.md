@@ -50,6 +50,26 @@ A standalone, lightweight, high-performance command line interface (CLI) for run
    python build.py
    ```
 
+## Non-Standalone Build Mode
+
+To create a drastically smaller executable, you can build the CLI in **Non-Standalone Mode**. In this mode, the CLI will not bundle the heavy WeChat DLLs or models, and will instead dynamically load them at runtime.
+
+### Building
+Set the environment variable before running `build.py`:
+```powershell
+$env:WECHAT_OCR_NON_STANDALONE = "1"
+python build.py
+```
+This produces `dist/wechat-ocr-py-cli-ns.exe`.
+
+### Runtime Usage
+When running the non-standalone executable, you can explicitly provide the paths to your local WeChat installation via command-line arguments:
+
+```powershell
+dist\wechat-ocr-py-cli-ns.exe --wechat-dir "C:\Program Files\Tencent\Weixin" --wechat-ocr-dir "%APPDATA%\Tencent\xwechat\xplugin\plugins\WeChatOcr\extracted\..." --input "image.png"
+```
+If these arguments are omitted, the CLI will automatically fallback and attempt to scan the standard local installation paths for the required libraries.
+
 ## Downloading & Extracting Releases
 
 The GitHub Actions CI pipeline automatically builds and packages the executable into a password-protected `.7z` archive (with encrypted headers).

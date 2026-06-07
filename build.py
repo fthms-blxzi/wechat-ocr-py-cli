@@ -7,6 +7,10 @@ def log(msg):
     print(f"[BUILD] {msg}")
 
 def clone_cpp_core():
+    if os.environ.get("WECHAT_OCR_REUSE_CPP_CORE") == "1" and os.path.exists("bin/wcocr.pyd") and os.path.exists("bin/wcocr.dll"):
+        log("WECHAT_OCR_REUSE_CPP_CORE is set. Skipping clone.")
+        return
+
     temp_dir = "wechat-ocr-cpp-temp"
     if os.path.exists(temp_dir):
         log(f"Cleaning existing directory {temp_dir}...")
@@ -184,6 +188,10 @@ def extract_toolchain_versions(build_dir):
     build_info["linker_version"] = linker_ver
 
 def build_cpp_core():
+    if os.environ.get("WECHAT_OCR_REUSE_CPP_CORE") == "1" and os.path.exists("bin/wcocr.pyd") and os.path.exists("bin/wcocr.dll"):
+        log("WECHAT_OCR_REUSE_CPP_CORE is set. Skipping compilation.")
+        return
+
     temp_dir = os.path.abspath("wechat-ocr-cpp-temp")
     os.makedirs("bin", exist_ok=True)
     
@@ -458,6 +466,7 @@ def download_wechat_runtime(dest_dir):
         raise Exception("Failed to locate required files in downloaded WeChat package.")
         
     log(f"Extracted components. Version discovered: {extracted_version}")
+    os.makedirs(dest_dir, exist_ok=True)
     shutil.copy2(extracted_weixin_exe, os.path.join(dest_dir, "Weixin.exe"))
     
     dest_ver_dir = os.path.join(dest_dir, extracted_version)
@@ -484,65 +493,90 @@ def download_wechat_runtime(dest_dir):
     if os.path.exists(temp_exe):
         os.remove(temp_exe)
     log("WeChat 4.x runtime successfully downloaded and extracted.")
-def save_metadata(dest_dir):
+def save_metadata(dest_dir, is_ns=False):
     log("Generating metadata.json for the built artifact...")
     import json
     import re
     import ctypes
     
-    weixin_exe = os.path.join(dest_dir, "Weixin.exe")
+    old_build_info = {}
+    meta_path = os.path.join(dest_dir, "metadata.json")
+    if os.path.exists(meta_path):
+        try:
+            with open(meta_path, "r", encoding="utf-8") as f:
+                old_meta = json.load(f)
+                old_build_info = old_meta.get("build_metadata", {})
+        except Exception:
+            pass
+
+    # Fallback to previous metadata if build_info values are Unknown
+    cmake_gen = build_info.get("cmake_generator", "Unknown")
+    if cmake_gen == "Unknown" and "cmake_generator" in old_build_info:
+        cmake_gen = old_build_info["cmake_generator"]
+        
+    comp_ver = build_info.get("compiler_version", "Unknown")
+    if comp_ver == "Unknown" and "compiler_version" in old_build_info:
+        comp_ver = old_build_info["compiler_version"]
+        
+    link_ver = build_info.get("linker_version", "Unknown")
+    if link_ver == "Unknown" and "linker_version" in old_build_info:
+        link_ver = old_build_info["linker_version"]
+
     wechat_ver = "Unknown"
-    if os.path.exists(weixin_exe):
-        try:
-            size = ctypes.windll.version.GetFileVersionInfoSizeW(weixin_exe, None)
-            if size:
-                res = ctypes.create_string_buffer(size)
-                if ctypes.windll.version.GetFileVersionInfoW(weixin_exe, 0, size, res):
-                    fixed = ctypes.c_void_p()
-                    flen = ctypes.c_uint()
-                    if ctypes.windll.version.VerQueryValueW(res, "\\", ctypes.byref(fixed), ctypes.byref(flen)):
-                        dwMS = ctypes.cast(fixed, ctypes.POINTER(ctypes.c_uint32))[2]
-                        dwLS = ctypes.cast(fixed, ctypes.POINTER(ctypes.c_uint32))[3]
-                        wechat_ver = f"{dwMS >> 16}.{dwMS & 0xffff}.{dwLS >> 16}.{dwLS & 0xffff}"
-        except Exception as e:
-            log(f"Error reading WeChat version: {e}")
+    combined_ocr_ver = "Unknown"
+    if not is_ns:
+        weixin_exe = os.path.join(dest_dir, "Weixin.exe")
+        if os.path.exists(weixin_exe):
+            try:
+                size = ctypes.windll.version.GetFileVersionInfoSizeW(weixin_exe, None)
+                if size:
+                    res = ctypes.create_string_buffer(size)
+                    if ctypes.windll.version.GetFileVersionInfoW(weixin_exe, 0, size, res):
+                        fixed = ctypes.c_void_p()
+                        flen = ctypes.c_uint()
+                        if ctypes.windll.version.VerQueryValueW(res, "\\", ctypes.byref(fixed), ctypes.byref(flen)):
+                            dwMS = ctypes.cast(fixed, ctypes.POINTER(ctypes.c_uint32))[2]
+                            dwLS = ctypes.cast(fixed, ctypes.POINTER(ctypes.c_uint32))[3]
+                            wechat_ver = f"{dwMS >> 16}.{dwMS & 0xffff}.{dwLS >> 16}.{dwLS & 0xffff}"
+            except Exception as e:
+                log(f"Error reading WeChat version: {e}")
 
-    ocr_ver = "Unknown"
-    ocr_dll_ver = "Unknown"
-    ocr_dir = os.path.join(dest_dir, "ocr")
-    xml_path = os.path.join(ocr_dir, "file_component.xml")
-    if os.path.exists(xml_path):
-        try:
-            with open(xml_path, "r", encoding="utf-8") as f:
-                xml_content = f.read()
-            m = re.search(r'version="(\d+)"', xml_content)
-            if m:
-                ocr_ver = m.group(1)
-        except Exception as e:
-            log(f"Error reading file_component.xml: {e}")
-            
-    wxocr_dll = os.path.join(ocr_dir, "wxocr.dll")
-    if os.path.exists(wxocr_dll):
-        try:
-            size = ctypes.windll.version.GetFileVersionInfoSizeW(wxocr_dll, None)
-            if size:
-                res = ctypes.create_string_buffer(size)
-                if ctypes.windll.version.GetFileVersionInfoW(wxocr_dll, 0, size, res):
-                    fixed = ctypes.c_void_p()
-                    flen = ctypes.c_uint()
-                    if ctypes.windll.version.VerQueryValueW(res, "\\", ctypes.byref(fixed), ctypes.byref(flen)):
-                        dwMS = ctypes.cast(fixed, ctypes.POINTER(ctypes.c_uint32))[2]
-                        dwLS = ctypes.cast(fixed, ctypes.POINTER(ctypes.c_uint32))[3]
-                        ocr_dll_ver = f"{dwMS >> 16}.{dwMS & 0xffff}.{dwLS >> 16}.{dwLS & 0xffff}"
-        except Exception as e:
-            log(f"Error reading WeChat OCR DLL version: {e}")
+        ocr_ver = "Unknown"
+        ocr_dll_ver = "Unknown"
+        ocr_dir = os.path.join(dest_dir, "ocr")
+        xml_path = os.path.join(ocr_dir, "file_component.xml")
+        if os.path.exists(xml_path):
+            try:
+                with open(xml_path, "r", encoding="utf-8") as f:
+                    xml_content = f.read()
+                m = re.search(r'version="(\d+)"', xml_content)
+                if m:
+                    ocr_ver = m.group(1)
+            except Exception as e:
+                log(f"Error reading file_component.xml: {e}")
+                
+        wxocr_dll = os.path.join(ocr_dir, "wxocr.dll")
+        if os.path.exists(wxocr_dll):
+            try:
+                size = ctypes.windll.version.GetFileVersionInfoSizeW(wxocr_dll, None)
+                if size:
+                    res = ctypes.create_string_buffer(size)
+                    if ctypes.windll.version.GetFileVersionInfoW(wxocr_dll, 0, size, res):
+                        fixed = ctypes.c_void_p()
+                        flen = ctypes.c_uint()
+                        if ctypes.windll.version.VerQueryValueW(res, "\\", ctypes.byref(fixed), ctypes.byref(flen)):
+                            dwMS = ctypes.cast(fixed, ctypes.POINTER(ctypes.c_uint32))[2]
+                            dwLS = ctypes.cast(fixed, ctypes.POINTER(ctypes.c_uint32))[3]
+                            ocr_dll_ver = f"{dwMS >> 16}.{dwMS & 0xffff}.{dwLS >> 16}.{dwLS & 0xffff}"
+            except Exception as e:
+                log(f"Error reading WeChat OCR DLL version: {e}")
 
-    combined_ocr_ver = ocr_ver
-    if ocr_dll_ver != "Unknown":
-        if combined_ocr_ver != "Unknown":
-            combined_ocr_ver = f"{combined_ocr_ver} (DLL: {ocr_dll_ver})"
-        else:
-            combined_ocr_ver = f"DLL: {ocr_dll_ver}"
+        combined_ocr_ver = ocr_ver
+        if ocr_dll_ver != "Unknown":
+            if combined_ocr_ver != "Unknown":
+                combined_ocr_ver = f"{combined_ocr_ver} (DLL: {ocr_dll_ver})"
+            else:
+                combined_ocr_ver = f"DLL: {ocr_dll_ver}"
 
     cli_version = "Unknown"
     cli_repo_url = "Unknown"
@@ -583,20 +617,21 @@ def save_metadata(dest_dir):
 
     python_ver = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
 
-    metadata = {
-        "wechat_version": wechat_ver,
-        "wechat_ocr_version": combined_ocr_ver,
-        "build_metadata": {
-            "cli_version": cli_version,
-            "cli_repo_url": cli_repo_url,
-            "cli_repo_ref": cli_repo_ref,
-            "cpp_repo_url": cpp_repo_url,
-            "cpp_repo_ref": cpp_repo_ref,
-            "python_version": python_ver,
-            "cmake_generator": build_info.get("cmake_generator", "Unknown"),
-            "compiler_version": build_info.get("compiler_version", "Unknown"),
-            "linker_version": build_info.get("linker_version", "Unknown")
-        }
+    metadata = {}
+    if not is_ns:
+        metadata["wechat_version"] = wechat_ver
+        metadata["wechat_ocr_version"] = combined_ocr_ver
+
+    metadata["build_metadata"] = {
+        "cli_version": cli_version,
+        "cli_repo_url": cli_repo_url,
+        "cli_repo_ref": cli_repo_ref,
+        "cpp_repo_url": cpp_repo_url,
+        "cpp_repo_ref": cpp_repo_ref,
+        "python_version": python_ver,
+        "cmake_generator": cmake_gen,
+        "compiler_version": comp_ver,
+        "linker_version": link_ver
     }
     
     meta_path = os.path.join(dest_dir, "metadata.json")
@@ -604,24 +639,51 @@ def save_metadata(dest_dir):
         json.dump(metadata, f, indent=4, ensure_ascii=False)
     log(f"Saved metadata: {metadata}")
 
-def package_standalone_exe():
+def package_standalone_exe(is_ns=False):
     log("Running PyInstaller to compile standalone executable...")
     import PyInstaller.__main__
-    PyInstaller.__main__.run([
+    
+    name = "wechat-ocr-py-cli-ns" if is_ns else "wechat-ocr-py-cli"
+    
+    # Selectively bundle folders/files to exclude heavy runtime DLLs in non-standalone mode
+    if is_ns:
+        add_data_args = [
+            "--add-data", "bin/wcocr.pyd;bin",
+            "--add-data", "bin/wcocr.dll;bin",
+            "--add-data", "bin/wechat/metadata.json;bin/wechat"
+        ]
+    else:
+        add_data_args = [
+            "--add-data", "bin/wcocr.pyd;bin",
+            "--add-data", "bin/wcocr.dll;bin",
+            "--add-data", "bin/wechat;bin/wechat"
+        ]
+        
+    pyi_args = [
         "--onefile",
-        "--add-data", "bin;bin",
-        "--name", "wechat-ocr-py-cli",
+        "--name", name,
+    ] + add_data_args + [
         "wechat_ocr_cli.py"
-    ])
-    log("PyInstaller compilation complete. Output executable is at dist/wechat-ocr-py-cli.exe")
+    ]
+    
+    PyInstaller.__main__.run(pyi_args)
+    log(f"PyInstaller compilation complete. Output executable is at dist/{name}.exe")
 
 def main():
     log("Starting build orchestration...")
     clone_cpp_core()
     build_cpp_core()
-    get_wechat_runtime()
-    save_metadata("bin/wechat")
-    package_standalone_exe()
+    
+    is_ns = os.environ.get("WECHAT_OCR_NON_STANDALONE") == "1"
+    
+    if not is_ns:
+        get_wechat_runtime()
+    else:
+        log("Non-standalone mode: skipping WeChat runtime download/copy.")
+        os.makedirs("bin/wechat", exist_ok=True)
+        
+    save_metadata("bin/wechat", is_ns)
+    package_standalone_exe(is_ns)
     
     # Cleanup temporary C++ build folder
     temp_dir = "wechat-ocr-cpp-temp"

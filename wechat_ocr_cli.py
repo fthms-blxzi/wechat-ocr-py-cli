@@ -21,6 +21,23 @@ if os.path.exists(bin_dir):
         except Exception:
             pass
 
+def get_pe_version(filepath):
+    import ctypes
+    try:
+        size = ctypes.windll.version.GetFileVersionInfoSizeW(filepath, None)
+        if size:
+            res = ctypes.create_string_buffer(size)
+            if ctypes.windll.version.GetFileVersionInfoW(filepath, 0, size, res):
+                fixed = ctypes.c_void_p()
+                flen = ctypes.c_uint()
+                if ctypes.windll.version.VerQueryValueW(res, "\\", ctypes.byref(fixed), ctypes.byref(flen)):
+                    dwMS = ctypes.cast(fixed, ctypes.POINTER(ctypes.c_uint32))[2]
+                    dwLS = ctypes.cast(fixed, ctypes.POINTER(ctypes.c_uint32))[3]
+                    return f"{dwMS >> 16}.{dwMS & 0xffff}.{dwLS >> 16}.{dwLS & 0xffff}"
+    except Exception:
+        pass
+    return "N/A"
+
 # Initialize worker processes
 def init_worker(wechat_dir, ocr_exe, dll_dir):
     if hasattr(os, 'add_dll_directory'):
@@ -118,9 +135,40 @@ def main():
     compiler = build_meta.get("compiler_version", "Unknown")
     linker = build_meta.get("linker_version", "Unknown")
 
+    is_bundled = os.path.exists(os.path.join(wechat_base, "Weixin.exe"))
+    header_title = "Bundled Versions"
+    
+    if not is_bundled and wechat_ver == "Unknown":
+        header_title = "Detected Local Versions"
+        weixin_exe_local = r"C:\Program Files\Tencent\Weixin\Weixin.exe"
+        if os.path.exists(weixin_exe_local):
+            wechat_ver = get_pe_version(weixin_exe_local)
+        else:
+            wechat_ver = "N/A"
+            
+        xplugin_dir = os.path.expandvars(r"%APPDATA%\Tencent\xwechat\xplugin\plugins\WeChatOcr")
+        if os.path.exists(xplugin_dir):
+            ocr_dlls = []
+            for root, dirs, files in os.walk(xplugin_dir):
+                if "wxocr.dll" in files and "extracted" in root:
+                    ocr_dlls.append(os.path.join(root, "wxocr.dll"))
+            if ocr_dlls:
+                latest_dll = sorted(ocr_dlls)[-1]
+                dll_ver = get_pe_version(latest_dll)
+                # Try to extract the plugin version from folder name (handling .../WeChatOcr/8082/extracted/wxocr.dll)
+                parent_dir = os.path.dirname(latest_dll)
+                folder_ver = os.path.basename(parent_dir)
+                if folder_ver.lower() == "extracted":
+                    folder_ver = os.path.basename(os.path.dirname(parent_dir))
+                ocr_ver = f"{folder_ver} (DLL: {dll_ver})" if folder_ver.isdigit() else f"DLL: {dll_ver}"
+            else:
+                ocr_ver = "N/A"
+        else:
+            ocr_ver = "N/A"
+
     description_text = "Standalone WeChat 4.x OCR Command Line Interface"
     epilog_text = (
-        f"Bundled Versions:\n"
+        f"{header_title}:\n"
         f"  WeChat Version:     {wechat_ver}\n"
         f"  WeChat OCR Version: {ocr_ver}\n\n"
         f"Build Metadata:\n"
@@ -144,6 +192,8 @@ def main():
     parser.add_argument("--input-list", "-l", default="-", metavar="INPUT_LIST_FILE_PATH", help="File containing image paths (one per line), or '-' for stdin streaming (default: '-')")
     parser.add_argument("--output", "-o", default="-", metavar="OUTPUT_FILE_PATH", help="Output JSONLines file path, or '-' for stdout (default: '-')")
     parser.add_argument("--workers", "-w", type=int, default=default_workers, metavar="NUM_WORKERS", help=f"Number of parallel worker processes (default: {default_workers})")
+    parser.add_argument("--wechat-dir", default=None, metavar="DIR", help="Path to WeChat installation directory containing Weixin.exe and the [version] subfolder (e.g. 'C:\\Program Files\\Tencent\\Weixin'). Optional in non-standalone mode, overrides auto-detection.")
+    parser.add_argument("--wechat-ocr-dir", default=None, metavar="DIR", help="Path to extracted WeChatOcr directory containing wxocr.dll and models (e.g. '%%APPDATA%%\\Tencent\\xwechat\\xplugin\\plugins\\WeChatOcr\\extracted\\...'). Optional in non-standalone mode, overrides auto-detection.")
     
     if len(sys.argv) == 1:
         parser.print_help()
@@ -151,20 +201,52 @@ def main():
         
     args = parser.parse_args()
     
-    if not os.path.exists(wechat_base):
-        print("Error: WeChat runtime folder not found. Please run build.py first.", file=sys.stderr)
-        sys.exit(1)
-        
-    wechat_exe = os.path.join(wechat_base, "Weixin.exe")
-    ocr_dll = os.path.join(wechat_base, "ocr", "wxocr.dll")
-    
-    # Detect the version subdirectory dynamically
+    if args.wechat_dir:
+        wechat_base = os.path.abspath(args.wechat_dir)
+        wechat_exe = os.path.join(wechat_base, "Weixin.exe")
+        if not os.path.exists(wechat_exe):
+            print(f"Error: Weixin.exe not found in specified --wechat-dir: {wechat_base}", file=sys.stderr)
+            sys.exit(1)
+    else:
+        if is_bundled:
+            wechat_exe = os.path.join(wechat_base, "Weixin.exe")
+        else:
+            weixin_exe_local = r"C:\Program Files\Tencent\Weixin\Weixin.exe"
+            if os.path.exists(weixin_exe_local):
+                wechat_base = os.path.dirname(weixin_exe_local)
+                wechat_exe = weixin_exe_local
+            else:
+                print("Error: Weixin.exe not found in bundled folder, --wechat-dir not specified, and local installation not found.", file=sys.stderr)
+                sys.exit(1)
+                
     ver_folders = [f for f in os.listdir(wechat_base) if os.path.isdir(os.path.join(wechat_base, f)) and f.startswith("4.1.")]
     if not ver_folders:
-        print("Error: WeChat version subfolder not found in runtime directory.", file=sys.stderr)
+        print(f"Error: WeChat 4.1.x version subfolder not found in: {wechat_base}", file=sys.stderr)
         sys.exit(1)
         
-    wechat_ver_dir = os.path.join(wechat_base, ver_folders[0])
+    wechat_ver_dir = os.path.join(wechat_base, sorted(ver_folders)[-1])
+    
+    if args.wechat_ocr_dir:
+        ocr_dll = os.path.join(os.path.abspath(args.wechat_ocr_dir), "wxocr.dll")
+        if not os.path.exists(ocr_dll):
+            print(f"Error: wxocr.dll not found in specified --wechat-ocr-dir: {args.wechat_ocr_dir}", file=sys.stderr)
+            sys.exit(1)
+    else:
+        if is_bundled:
+            ocr_dll = os.path.join(bin_dir, "wechat", "ocr", "wxocr.dll")
+        else:
+            xplugin_dir = os.path.expandvars(r"%APPDATA%\Tencent\xwechat\xplugin\plugins\WeChatOcr")
+            ocr_dll = None
+            if os.path.exists(xplugin_dir):
+                ocr_dlls = []
+                for root, dirs, files in os.walk(xplugin_dir):
+                    if "wxocr.dll" in files and "extracted" in root:
+                        ocr_dlls.append(os.path.join(root, "wxocr.dll"))
+                if ocr_dlls:
+                    ocr_dll = sorted(ocr_dlls)[-1]
+            if not ocr_dll:
+                print("Error: wxocr.dll not found in bundled folder, --wechat-ocr-dir not specified, and local AppData not found.", file=sys.stderr)
+                sys.exit(1)
     
     # Setup inputs and generators
     if args.input:

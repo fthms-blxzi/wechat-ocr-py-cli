@@ -43,17 +43,26 @@ def main():
 
     cli_ver = bm["cli_version"]
     cpp_ref = bm["cpp_repo_ref"][:6]
-    wxocr_ver = meta.get("wechat_ocr_version", "Unknown").split()[0]
     py_slug = "py" + "".join(bm["python_version"].split(".")[:2])
     tool_slug = detect_toolchain_slug(
         bm.get("cmake_generator", ""),
         bm.get("compiler_version", "Unknown"),
     )
 
-    archive_name = (
-        f"wechat-ocr-py-cli-{cli_ver}-wxocr-{wxocr_ver}"
-        f"-wcpp-{cpp_ref}-{py_slug}-{tool_slug}.7z"
-    )
+    is_ns = os.environ.get("WECHAT_OCR_NON_STANDALONE") == "1"
+    ns_suffix = "-ns" if is_ns else ""
+    
+    if is_ns:
+        archive_name = (
+            f"wechat-ocr-py-cli{ns_suffix}-{cli_ver}"
+            f"-wcpp-{cpp_ref}-{py_slug}-{tool_slug}.7z"
+        )
+    else:
+        wxocr_ver = meta.get("wechat_ocr_version", "Unknown").split()[0]
+        archive_name = (
+            f"wechat-ocr-py-cli{ns_suffix}-{cli_ver}-wxocr-{wxocr_ver}"
+            f"-wcpp-{cpp_ref}-{py_slug}-{tool_slug}.7z"
+        )
 
     print(f"VERSION={cli_ver}")
     print(f"ARCHIVE_NAME={archive_name}")

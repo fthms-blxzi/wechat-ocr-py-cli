@@ -1,4 +1,4 @@
-name: Build Standalone CLI (MinGW)
+name: Build CLI (MinGW)
 
 on:
   workflow_dispatch:
@@ -37,15 +37,18 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run build script
+      # STANDALONE BUILD
+      - name: Run build script (Standalone)
         run: |
           python build.py
+        env:
+          WECHAT_OCR_NON_STANDALONE: "0"
 
-      - name: Test Single File Mode
+      - name: Test Single File Mode (Standalone)
         run: dist\wechat-ocr-py-cli.exe --input "samples\sample-img-1.jpg" --output -
         shell: cmd
 
-      - name: Test Input List Mode
+      - name: Test Input List Mode (Standalone)
         run: |
           echo samples\sample-img-2.jpg > list.txt
           echo samples\sample-img-3.jpg >> list.txt
@@ -53,20 +56,65 @@ jobs:
           type results.jsonl
         shell: cmd
 
-      - name: Extract build version and archive name
+      - name: Extract build version and archive name (Standalone)
         run: python extract_release_meta.py
+        env:
+          WECHAT_OCR_NON_STANDALONE: "0"
 
-      - name: Compress executable into 7z
+      - name: Compress standalone executable into 7z
         run: |
           cd dist
           7z a -p"${{ env.VERSION }}" -mhe=on "${{ env.ARCHIVE_NAME }}" wechat-ocr-py-cli.exe
         shell: pwsh
 
-      - name: Create Release and Upload Asset
+      - name: Upload Standalone Asset to Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.VERSION }}
           name: Release ${{ env.VERSION }}
+          body: "The 7z archive password for extraction is the version tag: ${{ env.VERSION }}"
           files: dist/${{ env.ARCHIVE_NAME }}
           draft: false
           prerelease: false
+
+      # NON-STANDALONE BUILD
+      - name: Run build script (Non-Standalone)
+        run: |
+          python build.py
+        env:
+          WECHAT_OCR_NON_STANDALONE: "1"
+          WECHAT_OCR_REUSE_CPP_CORE: "1"
+
+      - name: Test Single File Mode (Non-Standalone)
+        run: dist\wechat-ocr-py-cli-ns.exe --wechat-dir "bin\wechat" --wechat-ocr-dir "bin\wechat\ocr" --input "samples\sample-img-1.jpg" --output -
+        shell: cmd
+
+      - name: Test Input List Mode (Non-Standalone)
+        run: |
+          echo samples\sample-img-2.jpg > list.txt
+          echo samples\sample-img-3.jpg >> list.txt
+          dist\wechat-ocr-py-cli-ns.exe --wechat-dir "bin\wechat" --wechat-ocr-dir "bin\wechat\ocr" --input-list list.txt --output results.jsonl
+          type results.jsonl
+        shell: cmd
+
+      - name: Extract build version and archive name (Non-Standalone)
+        run: python extract_release_meta.py
+        env:
+          WECHAT_OCR_NON_STANDALONE: "1"
+
+      - name: Compress non-standalone executable into 7z
+        run: |
+          cd dist
+          7z a -p"${{ env.VERSION }}" -mhe=on "${{ env.ARCHIVE_NAME }}" wechat-ocr-py-cli-ns.exe
+        shell: pwsh
+
+      - name: Upload Non-Standalone Asset to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.VERSION }}
+          name: Release ${{ env.VERSION }}
+          body: "The 7z archive password for extraction is the version tag: ${{ env.VERSION }}"
+          files: dist/${{ env.ARCHIVE_NAME }}
+          draft: false
+          prerelease: false
+

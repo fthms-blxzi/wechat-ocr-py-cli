@@ -9,6 +9,7 @@ build/
 dist/
 wechat_ocr_cli.spec
 wechat-ocr-py-cli.spec
+wechat-ocr-py-cli-ns.spec
 
 # Local runtime binaries and source copies
 bin/
